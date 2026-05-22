@@ -49,23 +49,44 @@ from commands._common import parse_kv
 
 def _to_tags(set_args):
     """Convert ['k1=v1', 'k2=v2'] to [{'Key':'k1','Value':'v1'}, ...]."""
-    raise NotImplementedError("TODO: implement _to_tags using parse_kv")
+    tags = []
+    for s in (set_args or []):
+        k, v = parse_kv(s)
+        tags.append({"Key": k, "Value": v})
+    return tags
 
 
 def _tag_ec2(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_ec2 using create_tags")
+    boto3.client("ec2").create_tags(Resources=[rid], Tags=tags)
 
 
 def _tag_rds(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_rds — remember to fetch ARN first")
+    rds = boto3.client("rds")
+    arn = rds.describe_db_instances(DBInstanceIdentifier=rid)["DBInstances"][0]["DBInstanceArn"]
+    rds.add_tags_to_resource(ResourceName=arn, Tags=tags)
 
 
 def _tag_s3(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_s3 — MERGE with existing tags, don't replace")
+    s3 = boto3.client("s3")
+    from botocore.exceptions import ClientError
+    try:
+        existing_tags = s3.get_bucket_tagging(Bucket=rid).get("TagSet", [])
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchTagSet':
+            existing_tags = []
+        else:
+            existing_tags = []
+            
+    tag_dict = {t["Key"]: t["Value"] for t in existing_tags}
+    for t in tags:
+        tag_dict[t["Key"]] = t["Value"]
+        
+    merged_tags = [{"Key": k, "Value": v} for k, v in tag_dict.items()]
+    s3.put_bucket_tagging(Bucket=rid, Tagging={"TagSet": merged_tags})
 
 
 def _tag_volume(rid, tags):
-    raise NotImplementedError("TODO: implement _tag_volume using create_tags")
+    boto3.client("ec2").create_tags(Resources=[rid], Tags=tags)
 
 
 DISPATCH = {
@@ -84,4 +105,11 @@ def run(args):
         args.id    — resource identifier
         args.set   — list[str], each "key=value"
     """
-    raise NotImplementedError("TODO: implement run() — see module docstring")
+    tags = _to_tags(args.set)
+    if not tags:
+        return
+        
+    DISPATCH[args.type](args.id, tags)
+    
+    tags_str = ", ".join(args.set)
+    print(f"Applied {len(tags)} tag(s) to {args.type} {args.id}: {tags_str}")
